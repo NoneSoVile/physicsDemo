@@ -38,4 +38,5 @@ private:
 	NvGLSLProgram* mSegmentProgram;
 	LineSegment* mTopWall, *mBottomWall, *mLeftWall, *mRightWall;
 	Triangle* mTriangles[TRIANGLE_NUMBER];
+	CollisionDetection* mCollisionDetection;
 };

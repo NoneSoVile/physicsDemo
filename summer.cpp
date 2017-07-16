@@ -29,13 +29,33 @@ static const float QUAD_COORDS[] = {
 	1.0f,  1.0f, -1.0f, 1.0f };
 
 static const float TRIANGLE_COORDS[] = {
-	-1.0f, -1.0f, -1.0f, 1.0f,
-	1.0f, -1.0f, -1.0f, 1.0f,
-	-1.0f,  1.0f, -1.0f, 1.0f };
+	-1.0f, -1.0f, -1.0f, 1.0f,        1.0f, 0, 0,
+	1.0f, -1.0f, -1.0f, 1.0f,         1.0f, 0, 0,
+	-1.0f,  1.0f, -1.0f, 1.0f,        1.0f, 0, 0, };
+
 static const float gravity = 9.8f;
 #define epsilon 0.0001
 #define epsilon_vec4f (vec4f(0.0001))
 #define epsilon_vec3f (vec3f(0.0001))
+
+class BaseShader : public NvGLSLProgram
+{
+public:
+	BaseShader(const char *vertexProgramPath,
+		const char *fragmentProgramPath) :
+		positionAHandle(-1)
+	{
+		setSourceFromFiles(vertexProgramPath, fragmentProgramPath);
+		positionAHandle = getAttribLocation("a_vPosition");
+		colorAHandle = getAttribLocation("a_vColor");
+
+		CHECK_GL_ERROR();
+	}
+
+	GLint positionAHandle;
+	GLint colorAHandle;
+};
+
 class Triangle
 {
 public:
@@ -47,6 +67,7 @@ public:
 	vec4f vForce;
 	vec4f local_vertices[3];
 	vec4f vertices[3];   //CC Clock
+	vec4f vertices_colors[3];   //CC Clock
 	vec4f edges[3];
 	vec4f edges_N[3];
 	vec4f vCenterOfMass;  //cener of mass,  object origin
@@ -75,15 +96,18 @@ public:
 		init(translatePos, angle, scale);
 	}
 	void init(vec4f translatePos, float angle, float scale) {
-		for (int i = 0; i < ARRAYSIZE(TRIANGLE_COORDS); i = i + 4) {
+		int stride = 7;
+		for (int i = 0; i < ARRAYSIZE(TRIANGLE_COORDS); i = i + stride) {
 			matrix4f rotation;
 			nv::rotationZ(rotation, angle);
-			vertices[i / 4].set_value(TRIANGLE_COORDS + i);
-			local_vertices[i / 4].set_value(TRIANGLE_COORDS + i);
-			vertices[i / 4] *= scale;
-			vertices[i / 4] = rotation * vertices[i / 4];
-			vertices[i / 4] += translatePos;
+			vertices[i / stride].set_value(TRIANGLE_COORDS + i);
+			local_vertices[i / stride].set_value(TRIANGLE_COORDS + i);
+			vertices[i / stride] *= scale;
+			vertices[i / stride] = rotation * vertices[i / stride];
+			vertices[i / stride] += translatePos;
+			vertices_colors[i / stride] = vec4f(.0f);
 		}
+		
 
 		vCenterOfMass = (vertices[0] + vertices[1] + vertices[2]) / 3;
 		edges[0] = (vertices[1] - vertices[0]);
@@ -149,16 +173,41 @@ public:
 		return transBackM * rotation * transOrigM;
 	}
 
-	void draw() {
+	void draw(const unsigned int attrHandle) {
+			glVertexAttribPointer(attrHandle, 4, GL_FLOAT, GL_FALSE, 4* sizeof(float),
+				(float*)vertices);
+			glEnableVertexAttribArray(attrHandle);
+			glDrawArrays(GL_TRIANGLE_STRIP, 0, 3);
+			glDisableVertexAttribArray(attrHandle);
+	}
 
+	void draw(const unsigned int posHandle, const unsigned int colorHandle) {
+		glVertexAttribPointer(posHandle, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+			(float*)vertices);
+		glVertexAttribPointer(colorHandle, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+			(float*)vertices_colors);
+		glEnableVertexAttribArray(posHandle);
+		glEnableVertexAttribArray(colorHandle);
+		glDrawArrays(GL_TRIANGLE_STRIP, 0, 3);
+		glDisableVertexAttribArray(colorHandle);
+		glDisableVertexAttribArray(posHandle);
 	}
 
 	void processCollision(int vertexIndex, vec3f collisionNormal) {
-
+		if (vertexIndex >= 0) {
+			vertices_colors[vertexIndex].x = 1.0f;
+		}
 	}
 
 	void processCollision(int edgeIndex, int edgeT) {
+		vertices_colors[edgeIndex].x = 1.0f;
+		vertices_colors[(edgeIndex + 1) % 3].y = 1.0f;
 
+	}
+
+	void processNoCollision() {
+		for(int i = 0; i < ARRAYSIZE(vertices_colors);i++)
+			vertices_colors[i] = vec4f(0.0f);
 	}
 
 	float distanceFromEdge(vec3f point, int segmentIndex, float& tCloset) {
@@ -167,8 +216,8 @@ public:
 		}
 		vec3f diff = point - (vec3f)vertices[segmentIndex];
 		vec3f direction = normalize(edges[segmentIndex]);
-		tCloset = dot(diff, direction);
-		if (tCloset > 1 || tCloset < 0) {
+		tCloset = dot(diff, (vec3f)edges[segmentIndex]) / length(edges[segmentIndex]);
+		if (tCloset > length(edges[segmentIndex]) || tCloset < 0) {
 			return -1;
 		}
 		diff -= tCloset*direction;
@@ -236,7 +285,7 @@ public:
 	}
 };
 
-class CollisionDectection {
+class CollisionDetection {
 public:
 	bool testIntersection(Triangle* T0, Triangle* T1) {
 		Triangle* triangles[2];
@@ -256,7 +305,7 @@ public:
 
 
 				}
-				for (int k = 0; i < T1->getVerticesCount(); k++) {
+				for (int k = 0; k < T1->getVerticesCount(); k++) {
 					float lambda = dot(dir, T1->vertices[k]);
 					lambda1_min = lambda1_min > lambda ? lambda : lambda1_min;
 					lambda1_max = lambda1_max < lambda ? lambda : lambda1_max;
@@ -280,7 +329,8 @@ public:
 			for (int j = 0; j < T1->getEdgeCount(); j++) {
 				float closestT;
 				float distance = T1->distanceFromEdge(curVertex, j, closestT);
-				if (distance >= 0 && distance < epsilon) {
+				if ((distance >= 0 && distance < epsilon) ||
+					(distance >= -epsilon && distance <= 0)) {
 					T0->processCollision(i, (vec3f)T1->edges_N[j]);
 					T1->processCollision(j, closestT);
 					return true;
@@ -289,12 +339,13 @@ public:
 		}
 
 		for (int i = 0; i < T1->getVerticesCount(); i++) {
-			vec3f curVertex = T0->vertices[i];
+			vec3f curVertex = T1->vertices[i];
 			for (int j = 0; j < T0->getEdgeCount(); j++) {
 				float closestT;
 				float distance = T0->distanceFromEdge(curVertex, j, closestT);
-				if (distance >= 0 && distance < epsilon) {
-					T1->processCollision(i, (vec3f)T1->edges_N[j]);
+				if ((distance >= 0 && distance < epsilon) ||
+					(distance >= -epsilon && distance <= 0)) {
+					T1->processCollision(i, (vec3f)T0->edges_N[j]);
 					T0->processCollision(j, closestT);
 					return true;
 				}
@@ -302,6 +353,10 @@ public:
 		}
 		//vertex-vertex
 		//edge-edge
+
+		//process no collison
+		T0->processNoCollision();
+		T1->processNoCollision();
 		return false;
 	}
 
@@ -328,9 +383,8 @@ public:
 Summer::Summer()
 {
     m_transformer->setTranslationVec(nv::vec3f(0.0f, 0.0f, -2.2f));
-    m_transformer->setRotationVec(nv::vec3f(NV_PI*0.35f, 0.0f, 0.0f));
+    m_transformer->setRotationVec(nv::vec3f(0.0f, 0.0f, 0.0f));
 
-    // Required in all subclasses to avoid silent link issues
     forceLinkHack();
 }
 
@@ -348,12 +402,12 @@ void Summer::configurationCallback(NvGLConfiguration& config)
 
 void Summer::initRendering(void) {
 	NV_APP_BASE_SHARED_INIT();
-
 	NvAssetLoaderAddSearchPath("summer/");
 
-    mProgram = NvGLSLProgram::createFromFiles("shaders/plain.vert", "shaders/plain.frag");
-	mTriangleProgram = NvGLSLProgram::createFromFiles("shaders/triangle.vert", "shaders/triangle.frag");
-	mSegmentProgram = NvGLSLProgram::createFromFiles("shaders/segment.vert", "shaders/segment.frag");
+	mProgram = new BaseShader("shaders/plain.vert", "shaders/plain.frag");//NvGLSLProgram::createFromFiles("shaders/plain.vert", "shaders/plain.frag");
+	mTriangleProgram = new BaseShader("shaders/triangle.vert", "shaders/triangle.frag");
+	mSegmentProgram = new BaseShader("shaders/segment.vert", "shaders/segment.frag");
+	initScene();
 }
 
 void Summer::initScene() {
@@ -362,9 +416,9 @@ void Summer::initScene() {
 	mLeftWall = new LineSegment(vec4f(-1.0, 0.0f, 0.0f, 0), 0.5f*PI, 1.0f);
 	mRightWall = new LineSegment(vec4f(1.0f, .0f, 0.0f, 0), 0.5f*PI, 1.0f);
 	for (int i = 0; i < ARRAYSIZE(mTriangles); i++) {
-		mTriangles[i] = new Triangle(vec4f(i*0.2f, .0f, 0.0f, 0), 0, 0.1f);
+		mTriangles[i] = new Triangle(vec4f(i*0.3f, i*0.3f, 0.0f, 0), 0.5*PI*0, 0.3f);
 	}
-		
+	mCollisionDetection = new CollisionDetection();
 }
 
 void Summer::shutdownRendering(void) {
@@ -391,23 +445,27 @@ void Summer::draw(void)
 {
     CHECK_GL_ERROR();
     glClear(GL_COLOR_BUFFER_BIT);
+	glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
     CHECK_GL_ERROR();
+
+	if (mCollisionDetection->testIntersection(mTriangles[0], mTriangles[1])) {
+		mCollisionDetection->findIntersection(mTriangles[0], mTriangles[1]);
+	}
 
     nv::matrix4f projection_matrix;
     nv::perspective(projection_matrix, 3.14f * 0.25f, m_width/(float)m_height, 0.1f, 30.0f);
     nv::matrix4f camera_matrix = projection_matrix * m_transformer->getModelViewMat();
     CHECK_GL_ERROR();
 
-    mProgram->enable();
-
-    mProgram->setUniformMatrix4fv("uViewProjMatrix", camera_matrix._array, 1, GL_FALSE);
-    CHECK_GL_ERROR();
-
-    NvDrawQuadGL(mProgram->getAttribLocation("aPosition"));
-    CHECK_GL_ERROR();
-
-    mProgram->disable();
+	mTriangleProgram->enable();
+	mTriangleProgram->setUniformMatrix4fv("uMVP", camera_matrix._array, 1, GL_FALSE);
+	for(int i = 0; i < ARRAYSIZE(mTriangles);i++)
+		mTriangles[i]->draw(mTriangleProgram->getAttribLocation("aPosition"),
+			mTriangleProgram->getAttribLocation("aColor"));
+	CHECK_GL_ERROR();
+	mTriangleProgram->disable();
 }
+
 
 NvAppBase* NvAppFactory() {
     return new Summer();
