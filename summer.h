@@ -13,6 +13,10 @@ class NvStopWatch;
 class NvGLSLProgram;
 class NvFramerateCounter;
 
+class LineSegment;
+class Triangle;
+class CollisionDetection;
+#define TRIANGLE_NUMBER 2
 class Summer : public NvSampleAppGL
 {
 public:
@@ -20,6 +24,7 @@ public:
     ~Summer();
     
     void initRendering(void);
+	void initScene();
     void shutdownRendering(void);
     void initUI(void);
     void draw(void);
@@ -29,4 +34,8 @@ public:
 
 private:
     NvGLSLProgram* mProgram;
+	NvGLSLProgram* mTriangleProgram;
+	NvGLSLProgram* mSegmentProgram;
+	LineSegment* mTopWall, *mBottomWall, *mLeftWall, *mRightWall;
+	Triangle* mTriangles[TRIANGLE_NUMBER];
 };
