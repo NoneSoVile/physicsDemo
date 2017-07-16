@@ -34,7 +34,7 @@ static const float TRIANGLE_COORDS[] = {
 	-1.0f,  1.0f, -1.0f, 1.0f,        1.0f, 0, 0, };
 
 static const float gravity = 9.8f;
-#define epsilon 0.0001
+#define epsilon 0.001
 #define epsilon_vec4f (vec4f(0.0001))
 #define epsilon_vec3f (vec3f(0.0001))
 
@@ -76,7 +76,7 @@ public:
 	matrix4f mRotationMatrix;
 	matrix4f mScaleMatrix;
 	matrix4f mModelMatrix;
-	vec4f mTraslateVec;
+	vec3f mTraslateVec;
 	vec4f mRotateVec;
 	vec4f mScaleVec;
 	float thetaX, thetaY, thetaZ;
@@ -103,6 +103,7 @@ public:
 			vertices[i / stride].set_value(TRIANGLE_COORDS + i);
 			local_vertices[i / stride].set_value(TRIANGLE_COORDS + i);
 			vertices[i / stride] *= scale;
+			vertices[i / stride].z = -1;
 			vertices[i / stride] = rotation * vertices[i / stride];
 			vertices[i / stride] += translatePos;
 			vertices_colors[i / stride] = vec4f(.0f);
@@ -122,8 +123,9 @@ public:
 		for (int i = 0; i < 3; i++)
 			edges_N[i] = normalize(edges[i])*r_half_pi;
 
-
 		vVelocity = 0.0;
+		vVelocity.x = 0.0f;
+		vVelocity.y = -0.0f;
 		vAngularVelocity = 0.0;
 		vAcceleration = 0.0;
 		vAngularAcceleration = 0.0;
@@ -131,11 +133,11 @@ public:
 		thetaX = 0; thetaY = 0; thetaZ = 0;
 	}
 
-	void translate(vec4f translatePos) {
+	void translate(vec3f translatePos) {
 		mTraslateVec += translatePos;
 		nv::translation(mTranslateMatrix, mTraslateVec.x, mTraslateVec.y, mTraslateVec.z);
 		for (int i = 0; i < ARRAYSIZE(vertices); i++) {
-			vertices[i] += translatePos;
+			vertices[i] += vec4f(translatePos, 0);
 		}
 
 		vCenterOfMass = (vertices[0] + vertices[1] + vertices[2]) / 3;
@@ -196,6 +198,9 @@ public:
 	void processCollision(int vertexIndex, vec3f collisionNormal) {
 		if (vertexIndex >= 0) {
 			vertices_colors[vertexIndex].x = 1.0f;
+			float projLen = dot(vVelocity, collisionNormal);
+			vec3f half = vVelocity - collisionNormal * projLen;
+			vVelocity = 2.0*half - vVelocity;
 		}
 	}
 
@@ -214,14 +219,22 @@ public:
 		if (segmentIndex >= 3) {
 			return -1;
 		}
-		vec3f diff = point - (vec3f)vertices[segmentIndex];
-		vec3f direction = normalize(edges[segmentIndex]);
-		tCloset = dot(diff, (vec3f)edges[segmentIndex]) / length(edges[segmentIndex]);
-		if (tCloset > length(edges[segmentIndex]) || tCloset < 0) {
+		vec3f startPoint(vertices[segmentIndex]);
+		vec3f diff = point - startPoint;
+		vec3f edge = vec3f(edges[segmentIndex]);
+		vec3f direction = normalize(edge);
+		tCloset = dot(diff, edge) / length(edge);
+		if (tCloset > length(edge) || tCloset < 0) {
 			return -1;
 		}
 		diff -= tCloset*direction;
-		return length(diff);
+		float distance = length(diff);
+		return distance;
+	}
+
+	void updateDynamics(float deltaTime) {
+		vec3f travel = vVelocity * deltaTime;
+		translate((travel));
 	}
 };
 
@@ -240,7 +253,9 @@ class LineSegment {
 public:
 	vec4f vertices[2];
 	vec4f local_vertices[2];
+	vec4f vertices_colors[2];
 	vec4f centerOfMass;
+	vec4f segment;
 	vec4f direction;
 	vec4f normal;
 	vec4f mTranslateVec;
@@ -259,11 +274,13 @@ public:
 			local_vertices[i / 4].set_value(LINE_SEGMENT_COORDS + i);
 			nv::rotationZ(rotation, angle);
 			vertices[i / 4] *= scale;
+			vertices[i / 4].z = -1;
 			vertices[i / 4] = rotation * vertices[i / 4];
 			vertices[i / 4] += translatePos;
+			vertices_colors[i / 4] = vec4f(.0f, 1.0f, 0.0f,1.0f);
 		}
 		centerOfMass = (vertices[0] + vertices[1]) / 2;
-		direction = vertices[1] - vertices[0];
+		segment = direction = vertices[1] - vertices[0];
 		direction = normalize(direction);
 		matrix4f r_half_pi;
 		nv::rotationZ(r_half_pi, -0.5f*PI);
@@ -272,16 +289,38 @@ public:
 
 	float distanceFrom(vec3f point, float& tCloset) {
 		vec3f diff = point - (vec3f)vertices[0];
-		tCloset = dot(diff, (vec3f)direction);
-		if (tCloset > 1 || tCloset < 0) {
+		float segmentLength = length((vec3f)segment);
+		tCloset = dot(diff, (vec3f)segment) / segmentLength;
+		
+		if (tCloset > segmentLength || tCloset < 0) {
 			return -1;
 		}
 		diff -= tCloset*(vec3f)direction;
-		return length(diff);
+		float distance = length(diff);
+		LOGI("segment distance = %f", distance);
+		return distance;
 	}
 
 	void processCollision() {
+		vertices_colors[0] = vec4f(1.0f, 0, 0, 0);
+		vertices_colors[1] = vec4f(1.0f, 0, 0, 0);
+	}
 
+	void processNoCollision() {
+		vertices_colors[0] = vec4f(0.0f, 1, 0, 1);
+		vertices_colors[1] = vec4f(0.0f, 1, 0, 1);
+	}
+
+	void draw(const unsigned int posHandle, const unsigned int colorHandle) {
+		glVertexAttribPointer(posHandle, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+			(float*)vertices);
+		glVertexAttribPointer(colorHandle, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+			(float*)vertices_colors);
+		glEnableVertexAttribArray(posHandle);
+		glEnableVertexAttribArray(colorHandle);
+		glDrawArrays(GL_LINES, 0, 2);
+		glDisableVertexAttribArray(colorHandle);
+		glDisableVertexAttribArray(posHandle);
 	}
 };
 
@@ -371,11 +410,15 @@ public:
 				return true;
 			}
 		}
+
+		//process no collison
+		tri->processNoCollision();
+		//lineSeg->processNoCollision();
 		return false;
 	}
 
 	bool testIntersection(LineSegment* lineSeg, Triangle* tri) {
-		return false;
+		return true;
 	}
 };
 
@@ -410,14 +453,20 @@ void Summer::initRendering(void) {
 	initScene();
 }
 
+#define SCALE_WALL_V 1.3f
+#define SCALE_WALL_H 2.2f
+#define TRANSLATE_WALL_H 2.2f
+#define TRANSLATE_WALL_V 1.3f
 void Summer::initScene() {
-	mTopWall = new LineSegment(vec4f(0, 1.0f, 0.0f, 0), 0, 1.0f);
-	mBottomWall = new LineSegment(vec4f(0, -1.0f, 0.0f, 0), 0, 1.0f);
-	mLeftWall = new LineSegment(vec4f(-1.0, 0.0f, 0.0f, 0), 0.5f*PI, 1.0f);
-	mRightWall = new LineSegment(vec4f(1.0f, .0f, 0.0f, 0), 0.5f*PI, 1.0f);
+	mTopWall = new LineSegment(vec4f(0, TRANSLATE_WALL_V, 0.0f, 0), 0, SCALE_WALL_H);
+	mBottomWall = new LineSegment(vec4f(0, -TRANSLATE_WALL_V, 0.0f, 0), 0, SCALE_WALL_H);
+	mLeftWall = new LineSegment(vec4f(-TRANSLATE_WALL_H, 0.0f, 0.0f, 0), 0.5f*PI, SCALE_WALL_V);
+	mRightWall = new LineSegment(vec4f(TRANSLATE_WALL_H, .0f, 0.0f, 0), 0.5f*PI, SCALE_WALL_V);
 	for (int i = 0; i < ARRAYSIZE(mTriangles); i++) {
-		mTriangles[i] = new Triangle(vec4f(i*0.3f, i*0.3f, 0.0f, 0), 0.5*PI*0, 0.3f);
+		mTriangles[i] = new Triangle(vec4f(i*0.3f, i*0.3f, 0.0f, 0), 0.25*PI*i, 0.3f);
 	}
+	mTriangles[0]->vVelocity = vec3f(-0.01, 0.0100, 0);
+	mTriangles[1]->vVelocity = vec3f(0.01, 0.01000, 0);
 	mCollisionDetection = new CollisionDetection();
 }
 
@@ -448,10 +497,30 @@ void Summer::draw(void)
 	glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
     CHECK_GL_ERROR();
 
+	
+	int triangleCount = ARRAYSIZE(mTriangles);
+	const int wallCount = 4;
+	LineSegment* walls[wallCount] = {mTopWall, 
+								mBottomWall,
+								mLeftWall,
+								mRightWall
+	};
+
+	for (int i = 0; i < triangleCount; i++)
+		mTriangles[i]->updateDynamics(1.0f);
+
+	for(int i = 0; i < triangleCount; i++)
+		for (int j = 0; j < wallCount; j++) {
+			if (mCollisionDetection->testIntersection(walls[j], mTriangles[i])) {
+				mCollisionDetection->findIntersection(walls[j], mTriangles[i]);
+			}
+		}
+
 	if (mCollisionDetection->testIntersection(mTriangles[0], mTriangles[1])) {
 		mCollisionDetection->findIntersection(mTriangles[0], mTriangles[1]);
 	}
-
+	
+	
     nv::matrix4f projection_matrix;
     nv::perspective(projection_matrix, 3.14f * 0.25f, m_width/(float)m_height, 0.1f, 30.0f);
     nv::matrix4f camera_matrix = projection_matrix * m_transformer->getModelViewMat();
@@ -462,6 +531,15 @@ void Summer::draw(void)
 	for(int i = 0; i < ARRAYSIZE(mTriangles);i++)
 		mTriangles[i]->draw(mTriangleProgram->getAttribLocation("aPosition"),
 			mTriangleProgram->getAttribLocation("aColor"));
+	CHECK_GL_ERROR();
+	mTopWall->draw(mTriangleProgram->getAttribLocation("aPosition"),
+		mTriangleProgram->getAttribLocation("aColor"));
+	mBottomWall->draw(mTriangleProgram->getAttribLocation("aPosition"),
+		mTriangleProgram->getAttribLocation("aColor"));
+	mLeftWall->draw(mTriangleProgram->getAttribLocation("aPosition"),
+		mTriangleProgram->getAttribLocation("aColor"));
+	mRightWall->draw(mTriangleProgram->getAttribLocation("aPosition"),
+		mTriangleProgram->getAttribLocation("aColor"));
 	CHECK_GL_ERROR();
 	mTriangleProgram->disable();
 }
