@@ -34,7 +34,7 @@ static const float TRIANGLE_COORDS[] = {
 	-1.0f,  1.0f, -1.0f, 1.0f,        1.0f, 0, 0, };
 
 static const float gravity = 9.8f;
-#define epsilon 0.001
+#define epsilon 0.01
 #define epsilon_vec4f (vec4f(0.0001))
 #define epsilon_vec3f (vec3f(0.0001))
 
@@ -463,10 +463,12 @@ void Summer::initScene() {
 	mLeftWall = new LineSegment(vec4f(-TRANSLATE_WALL_H, 0.0f, 0.0f, 0), 0.5f*PI, SCALE_WALL_V);
 	mRightWall = new LineSegment(vec4f(TRANSLATE_WALL_H, .0f, 0.0f, 0), 0.5f*PI, SCALE_WALL_V);
 	for (int i = 0; i < ARRAYSIZE(mTriangles); i++) {
-		mTriangles[i] = new Triangle(vec4f(i*0.3f, i*0.3f, 0.0f, 0), 0.25*PI*i, 0.3f);
+	
+		mTriangles[i] = new Triangle(vec4f(0, 0, 0.0f, 0), 0.15*PI*i, 0.1f);
+		mTriangles[i]->vVelocity = vec3f(0.0001*(i + 1)*cosf(i*.1f), 0.0001*(i + 1)*sinf(i*.1f), 0);
 	}
-	mTriangles[0]->vVelocity = vec3f(-0.01, 0.0100, 0);
-	mTriangles[1]->vVelocity = vec3f(0.01, 0.01000, 0);
+	
+
 	mCollisionDetection = new CollisionDetection();
 }
 
