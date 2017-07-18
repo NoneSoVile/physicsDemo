@@ -64,7 +64,8 @@ public:
 	vec3f vAcceleration;
 	vec3f vAngularAcceleration;
 
-	vec4f vForce;
+	vec3f vForce;
+	float collideForce;
 	vec4f local_vertices[3];
 	vec4f vertices[3];   //CC Clock
 	vec4f vertices_colors[3];   //CC Clock
@@ -113,7 +114,7 @@ public:
 		vCenterOfMass = (vertices[0] + vertices[1] + vertices[2]) / 3;
 		edges[0] = (vertices[1] - vertices[0]);
 		edges[1] = (vertices[2] - vertices[1]);
-		edges[2] = (vertices[1] - vertices[2]);
+		edges[2] = (vertices[0] - vertices[2]);
 		vec3f area_vec = cross((vec3f)edges[0], (vec3f)edges[1]);
 		fArea = 0.5*nv::length(area_vec);
 		fDensity = 1.0f;
@@ -131,9 +132,11 @@ public:
 		vAngularAcceleration = 0.0;
 		fSpeed = length(vVelocity);
 		thetaX = 0; thetaY = 0; thetaZ = 0;
+		vForce = vec3f(0, 0, 1.0f);
+		collideForce = 0.0f;
 	}
 
-	void translate(vec3f translatePos) {
+	void translateAndRotate(vec3f translatePos) {
 		mTraslateVec += translatePos;
 		nv::translation(mTranslateMatrix, mTraslateVec.x, mTraslateVec.y, mTraslateVec.z);
 		for (int i = 0; i < ARRAYSIZE(vertices); i++) {
@@ -141,6 +144,16 @@ public:
 		}
 
 		vCenterOfMass = (vertices[0] + vertices[1] + vertices[2]) / 3;
+		//rotation
+		float theta = vAngularVelocity.z;
+				
+		for (int i = 0; i < ARRAYSIZE(vertices); i++) {
+			vertices[i] -= vCenterOfMass;
+			float x = vertices[i].x, y = vertices[i].y;
+			vertices[i].x = cosf(theta)*x - sinf(theta)*y;
+			vertices[i].y = sinf(theta)*x + cosf(theta)*y;
+			vertices[i] += vCenterOfMass;
+		}
 		edges[0] = (vertices[1] - vertices[0]);
 		edges[1] = (vertices[2] - vertices[1]);
 		edges[2] = (vertices[1] - vertices[2]);
@@ -201,13 +214,17 @@ public:
 			float projLen = dot(vVelocity, collisionNormal);
 			vec3f half = vVelocity - collisionNormal * projLen;
 			vVelocity = 2.0*half - vVelocity;
+			vAngularVelocity = -vAngularVelocity;
+			collideForce = 3.0f;
 		}
 	}
 
 	void processCollision(int edgeIndex, int edgeT) {
 		vertices_colors[edgeIndex].x = 1.0f;
 		vertices_colors[(edgeIndex + 1) % 3].y = 1.0f;
-
+		float projLen = dot(vVelocity, (vec3f)edges_N[edgeIndex]);
+		vec3f half = vVelocity - (vec3f)edges_N[edgeIndex] * projLen;
+		vVelocity = 2.0*half - vVelocity;
 	}
 
 	void processNoCollision() {
@@ -232,9 +249,23 @@ public:
 		return distance;
 	}
 
+	bool isPointInside(vec4f point) {
+		for (int i = 0; i < 3; i++) {
+			vec3f v1 = point - vertices[i];
+			float determin = dot((vec3f)edges_N[i], v1);
+			if (determin < 0.0f)
+				return false;
+
+		}
+		return true;
+		
+	}
+
 	void updateDynamics(float deltaTime) {
 		vec3f travel = vVelocity * deltaTime;
-		translate((travel));
+		
+			
+		translateAndRotate((travel));
 	}
 };
 
@@ -333,8 +364,8 @@ public:
 		for (int t = 0; t < 2; t++) {
 			Triangle* curTriangle = triangles[t];
 			for (int i = 0; i < curTriangle->getNormalCount(); i++) {
-				float lambda0_min = 0, lambda0_max = 0;
-				float lambda1_min = 0, lambda1_max = 0;
+				float lambda0_min = 99999.0f, lambda0_max = -lambda0_min;
+				float lambda1_min = 99999.0f, lambda1_max = -lambda1_min;
 
 				vec4f dir = curTriangle->edges_N[i];
 				for (int j = 0; j < T0->getVerticesCount(); j++) {
@@ -363,17 +394,30 @@ public:
 
 	bool findIntersection(Triangle* T0, Triangle* T1) {
 		//edge-vertex
+		bool result = false;
 		for (int i = 0; i < T0->getVerticesCount(); i++) {
 			vec3f curVertex = T0->vertices[i];
 			for (int j = 0; j < T1->getEdgeCount(); j++) {
 				float closestT;
 				float distance = T1->distanceFromEdge(curVertex, j, closestT);
+				
 				if ((distance >= 0 && distance < epsilon) ||
-					(distance >= -epsilon && distance <= 0)) {
+					(distance >= -epsilon && distance <= 0) 
+					) {
 					T0->processCollision(i, (vec3f)T1->edges_N[j]);
 					T1->processCollision(j, closestT);
-					return true;
+					result = true;
+					return result;
 				}
+
+			}
+
+			bool isPtInside = T1->isPointInside(vec4f(curVertex, 1));
+			if (isPtInside) {
+				T0->vVelocity = vec3f(-T0->vVelocity.x, -T0->vVelocity.y, 0);
+				T0->vAngularVelocity = -T0->vAngularVelocity;
+				result = true;
+				return result;
 			}
 		}
 
@@ -382,21 +426,34 @@ public:
 			for (int j = 0; j < T0->getEdgeCount(); j++) {
 				float closestT;
 				float distance = T0->distanceFromEdge(curVertex, j, closestT);
+				
 				if ((distance >= 0 && distance < epsilon) ||
-					(distance >= -epsilon && distance <= 0)) {
+					(distance >= -epsilon && distance <= 0)
+					) {
 					T1->processCollision(i, (vec3f)T0->edges_N[j]);
 					T0->processCollision(j, closestT);
-					return true;
+					result = true;
+					return result;
 				}
+
+			}
+
+			bool isPtInside = T0->isPointInside(vec4f(curVertex, 1));
+			if (isPtInside) {
+				T1->vVelocity = vec3f(-T1->vVelocity.x, -T1->vVelocity.y, 0);
+				T1->vAngularVelocity = -T1->vAngularVelocity;
+				//T0->vVelocity = -2.0f*-T0->vVelocity;
+				result = true;
+				return result;
 			}
 		}
 		//vertex-vertex
 		//edge-edge
 
 		//process no collison
-		T0->processNoCollision();
-		T1->processNoCollision();
-		return false;
+		//T0->processNoCollision();
+		//T1->processNoCollision();
+		return result;
 	}
 
 	bool findIntersection(LineSegment* lineSeg, Triangle* tri) {
@@ -412,7 +469,7 @@ public:
 		}
 
 		//process no collison
-		tri->processNoCollision();
+		//tri->processNoCollision();
 		//lineSeg->processNoCollision();
 		return false;
 	}
@@ -464,8 +521,9 @@ void Summer::initScene() {
 	mRightWall = new LineSegment(vec4f(TRANSLATE_WALL_H, .0f, 0.0f, 0), 0.5f*PI, SCALE_WALL_V);
 	for (int i = 0; i < ARRAYSIZE(mTriangles); i++) {
 	
-		mTriangles[i] = new Triangle(vec4f(0, 0, 0.0f, 0), 0.15*PI*i, 0.1f);
-		mTriangles[i]->vVelocity = vec3f(0.0001*(i + 1)*cosf(i*.1f), 0.0001*(i + 1)*sinf(i*.1f), 0);
+		mTriangles[i] = new Triangle(vec4f(0.01*(i + 1)*cosf(i*1.0f), 0.01*(i + 1)*sinf(i*1.0f), 0.0f, 0), 0.15*PI*i, i>=1 ? 0.10f : 0.2f - 0.03f*i);
+		mTriangles[i]->vVelocity = 2.0*vec3f(0.001*(i + 1)*cosf(i*.1f), 0.001*(i + 1)*sinf(i*.1f), 0);
+		mTriangles[i]->vAngularVelocity =  vec3f(0, 0, i >= 5 ? 0.003f*i : 0.01*(i + 1));
 	}
 	
 
@@ -494,32 +552,54 @@ void Summer::reshape(int32_t width, int32_t height)
 
 void Summer::draw(void)
 {
-    CHECK_GL_ERROR();
-    glClear(GL_COLOR_BUFFER_BIT);
+	CHECK_GL_ERROR();
+	glClear(GL_COLOR_BUFFER_BIT);
 	glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-    CHECK_GL_ERROR();
+	CHECK_GL_ERROR();
 
-	
+
 	int triangleCount = ARRAYSIZE(mTriangles);
 	const int wallCount = 4;
-	LineSegment* walls[wallCount] = {mTopWall, 
+	LineSegment* walls[wallCount] = { mTopWall,
 								mBottomWall,
 								mLeftWall,
 								mRightWall
 	};
 
-	for (int i = 0; i < triangleCount; i++)
-		mTriangles[i]->updateDynamics(1.0f);
+	
+		
+	for (int j = 0; j < wallCount; j++) {
+		walls[j]->processNoCollision();
+	}
 
-	for(int i = 0; i < triangleCount; i++)
+	for (int i = 0; i < triangleCount; i++) {
+		mTriangles[i]->processNoCollision();
+		//mTriangles[i]->updateDynamics(1.0f);
+	}
+	
+
+	for (int i = 0; i < triangleCount; i++)
 		for (int j = 0; j < wallCount; j++) {
 			if (mCollisionDetection->testIntersection(walls[j], mTriangles[i])) {
-				mCollisionDetection->findIntersection(walls[j], mTriangles[i]);
+				if (mCollisionDetection->findIntersection(walls[j], mTriangles[i])) {
+
+				}
 			}
 		}
 
-	if (mCollisionDetection->testIntersection(mTriangles[0], mTriangles[1])) {
-		mCollisionDetection->findIntersection(mTriangles[0], mTriangles[1]);
+
+	for (int i = 0; i < triangleCount; i++) {
+		
+		for (int j = i + 1;j < triangleCount; j++) {
+			if (i !=j && mCollisionDetection->testIntersection(mTriangles[j], mTriangles[i])) {
+				mCollisionDetection->findIntersection(mTriangles[j], mTriangles[i]);
+			}
+		}
+	}
+
+	for (int i = 0; i < triangleCount; i++) {
+		//mTriangles[i]->processNoCollision();
+		mTriangles[i]->updateDynamics(1.0f);
 	}
 	
 	
