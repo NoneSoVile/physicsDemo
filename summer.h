@@ -16,7 +16,7 @@ class NvFramerateCounter;
 class LineSegment;
 class Triangle;
 class CollisionDetection;
-#define TRIANGLE_NUMBER 40
+#define TRIANGLE_NUMBER 20
 class Summer : public NvSampleAppGL
 {
 public:

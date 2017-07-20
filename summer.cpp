@@ -249,30 +249,32 @@ public:
 		glDisableVertexAttribArray(posHandle);
 	}
 
-	void processCollision(int vertexIndex, vec3f collisionNormal, float Force = 1.0f) {
+	void processCollisionWithVertex(int vertexIndex, vec3f collisionNormal, float Force = 1.0f) {
 		if (vertexIndex >= 0) {
 			vertices_colors[vertexIndex].x = 1.0f;
 			float projLen = dot(vVelocity, collisionNormal);
 			vec3f half = vVelocity - collisionNormal * projLen;
-			if (Force > 1.0f)
-				vVelocity = -vVelocity;
-			else
-				vVelocity = ( 2.0*half - vVelocity);
+			vVelocity = ( 2.0*half - vVelocity);
 			collideForce = Force;
 			vAngularVelocity = -vAngularVelocity;
 
 		}
 	}
 
-	void processCollision(int edgeIndex, int edgeT, float Force = 1.0f) {
+	void processCollisionWithEdge(int edgeIndex, vec3f collideVelocity, float Force = 1.0f) {
 		vertices_colors[edgeIndex].x = 1.0f;
 		vertices_colors[(edgeIndex + 1) % 3].y = 1.0f;
-		float projLen = dot(vVelocity, (vec3f)edges_N[edgeIndex]);
-		vec3f half = vVelocity - (vec3f)edges_N[edgeIndex] * projLen;
-		if (Force > 1.0f)
-			vVelocity = -vVelocity;
-		else
-			vVelocity = (2.0*half - vVelocity);
+		vec3f Normal = (vec3f)edges_N[edgeIndex];
+		float projLen = dot(collideVelocity, Normal);
+		vec3f half = collideVelocity - Normal * projLen;
+		vec3f dir = normalize(2.0*half - collideVelocity);
+		float x = -dir.y, y = dir.x;
+		//dir.x = x;
+		//dir.y = y;
+
+		
+		vVelocity =  -length(vVelocity) * dir;
+		vAngularVelocity = -vAngularVelocity;
 		collideForce = Force;
 	}
 
@@ -299,18 +301,22 @@ public:
 	}
 
 	bool isPointInside(vec4f point, vec3f velocity, float& whitchEdge, vec3f& whichEdgeNormal) {
+		return false;
 		float oldAngle = -1.0;
+		float oldDistance = -1.0f;
 		for (int i = 0; i < 3; i++) {
 			vec3f v1 = point - vertices[i];
 			float determin = dot((vec3f)edges_N[i], v1);
 			float dotvelocity = dot(velocity, (vec3f)edges_N[i]);
-			float newAngle = dotvelocity / length(velocity);
-			if (newAngle > oldAngle) {
+			float newAngle = dotvelocity / length((vec3f)edges_N[i]);
+			float closetT;
+			float newDistance = distanceFromEdge((vec3f)point, i, closetT);
+			if (newDistance < oldDistance) {
 				whichEdgeNormal = (vec3f)edges_N[i];
 				whitchEdge = i;
-				oldAngle = newAngle;
+				oldDistance = newDistance;
 			}
-			if (determin < 0.0f)
+			if (determin > 0.0f)
 				return false;
 		}
 		return true;
@@ -454,6 +460,8 @@ public:
 	bool findIntersection(Triangle* T0, Triangle* T1, vec3f direction) {
 		//edge-vertex
 		bool result = false;
+		float collideForce = 2.0f;
+		float reverseFactor = 0.5f;
 		for (int i = 0; i < T0->getVerticesCount(); i++) {
 			vec3f curVertex = T0->vertices[i];
 
@@ -462,11 +470,13 @@ public:
 			float whichEdge;
 			bool isPtInside = T1->isPointInside(vec4f(curVertex, 1), velocity, whichEdge, whichEdgeNormal);
 			if (isPtInside) {
-				if (findFirstContactPositionAndOrientation(T0, T1))
-					return true;
-				float closestT;
-				T0->processCollision(i, whichEdgeNormal, 4.0f);
-				T1->processCollision(whichEdge, closestT);
+				//if (findFirstContactPositionAndOrientation(T0, T1))
+					//return true;
+				T0->reverseTranslateAndRotate(reverseFactor);
+				T1->reverseTranslateAndRotate(reverseFactor);
+				float closestT = 0.0;
+				T0->processCollisionWithVertex(i, whichEdgeNormal, collideForce);
+				T1->processCollisionWithEdge(whichEdge, T0->vVelocity, collideForce);
 				result = true;
 				return result;
 			}
@@ -474,12 +484,14 @@ public:
 			for (int j = 0; j < T1->getEdgeCount(); j++) {
 				float closestT;
 				float distance = T1->distanceFromEdge(curVertex, j, closestT);
-				
-				if ((distance >= 0 && distance < epsilon) ||
-					(distance >= -epsilon && distance <= 0) 
+				float dotproduct = dot(T0->vVelocity, (vec3f)T1->edges_N[j]);
+				if (
+					dotproduct < 0 
+					//(distance >= 0 && distance < epsilon) ||
+					//(distance >= -epsilon && distance <= 0) 
 					) {
-					T0->processCollision(i, (vec3f)T1->edges_N[j]);
-					T1->processCollision(j, closestT);
+					T0->processCollisionWithVertex(i, (vec3f)T1->edges_N[j]);
+					T1->processCollisionWithEdge(j, T0->vVelocity);
 					result = true;
 					return result;
 				}
@@ -494,11 +506,12 @@ public:
 			float whichEdge;
 			bool isPtInside = T0->isPointInside(vec4f(curVertex, 1), velocity, whichEdge, whichEdgeNormal);
 			if (isPtInside) {
-				if (findFirstContactPositionAndOrientation(T0, T1))
-					return true;
-				float closestT;
-				T1->processCollision(i, whichEdgeNormal, 3.0f);
-				T0->processCollision(whichEdge, closestT, 3.0);
+				//if (findFirstContactPositionAndOrientation(T0, T1))
+					//return true;
+				T0->reverseTranslateAndRotate(reverseFactor);
+				T1->reverseTranslateAndRotate(reverseFactor);
+				T1->processCollisionWithVertex(i, whichEdgeNormal);
+				T0->processCollisionWithEdge(whichEdge, T1->vVelocity);
 				result = true;
 				return result;
 			}
@@ -506,12 +519,14 @@ public:
 			for (int j = 0; j < T0->getEdgeCount(); j++) {
 				float closestT;
 				float distance = T0->distanceFromEdge(curVertex, j, closestT);
-				
-				if ((distance >= 0 && distance < epsilon) ||
-					(distance >= -epsilon && distance <= 0)
+				float dotproduct = dot(T1->vVelocity, (vec3f)T0->edges_N[j]);
+				if (
+					dotproduct < 0
+					//(distance >= 0 && distance < epsilon) ||
+					//(distance >= -epsilon && distance <= 0)
 					) {
-					T1->processCollision(i, (vec3f)T0->edges_N[j], 3.0f);
-					T0->processCollision(j, closestT, 3.0);
+					T1->processCollisionWithVertex(i, (vec3f)T0->edges_N[j]);
+					T0->processCollisionWithEdge(j, T1->vVelocity);
 					result = true;
 					return result;
 				}
@@ -535,7 +550,7 @@ public:
 			float closestT;
 			float distance = lineSeg->distanceFrom(curVertex, closestT);
 			if (distance >= 0 && distance < epsilon) {
-				tri->processCollision(i, (vec3f)lineSeg->normal);
+				tri->processCollisionWithVertex(i, (vec3f)lineSeg->normal);
 				lineSeg->processCollision();
 				return true;
 			}
@@ -548,17 +563,19 @@ public:
 	}
 
 	bool findFirstContactPositionAndOrientation(Triangle* T0, Triangle* T1) {
+		return false;
 		float depthSearch = 2.0f;//binary search
 
-		while (depthSearch < 1.0f) {
-			T0->vVelocity *= 0.5f;
-			T0->vAngularVelocity *= 0.5f;
-			T1->vVelocity *= 0.5f;
-			T1->vAngularVelocity *= 0.5f;
+		while (depthSearch < 10000.0f) {
+			
 			vec3f direction;
-			T0->reverseTranslateAndRotate(1.0f - 1.0f/depthSearch);
-			T1->reverseTranslateAndRotate(1.0f - 1.0f/depthSearch);
+			T0->reverseTranslateAndRotate(1.6f - 1.0f/depthSearch);
+			T1->reverseTranslateAndRotate(1.6f - 1.0f/depthSearch);
 			if (!testIntersection(T0, T1, direction)) {
+				T0->vVelocity *= 0.5f;
+				T0->vAngularVelocity *= 0.5f;
+				T1->vVelocity *= 0.5f;
+				T1->vAngularVelocity *= 0.5f;
 				return true;
 			}
 			depthSearch *= 2.0f;
@@ -644,7 +661,7 @@ void Summer::initScene() {
 		float y = (i / 10) * 0.4f - 0.5f;
 		float x = (i % 10) * 0.4f - 1.7f;
 		mTriangles[i] = new Triangle(vec4f(x, y, 0.0f, 0), 0.15*PI*i, i>=5? 0.10f : 0.2f - 0.03f*i);
-		mTriangles[i]->vVelocity = 3.0*vec3f(0.001*((i + 1) % 15)*cosf(i*.1f), 0.001*((i + 1) % 15)*sinf(i*.1f), 0.);
+		mTriangles[i]->vVelocity = 10.0*vec3f(0.001*((i + 1) % 15)*cosf(i*.1f), 0.001*((i + 1) % 15)*sinf(i*.1f), 0.);
 		mTriangles[i]->vAngularVelocity = vec3f(0, 0, i >= 5 ? 0.002f*i : 0.01*(i + 1));
 	}
 	
